@@ -1,0 +1,42 @@
+{ config, pkgs, ... }:
+
+let swayConfig = pkgs.writeText "greetd-sway-config" ''
+  # `-l` activates layer-shell mode. Notice that `swaymsg exit` will run after gtkgreet.
+  exec "${pkgs.greetd.gtkgreet}/bin/gtkgreet -l -s '/etc/greetd/style.css'; swaymsg exit"
+  bindsym Mod4+shift+e exec swaynag \
+    -t warning \
+    -m 'What do you want to do?' \
+    -b 'Poweroff' 'systemctl poweroff' \
+    -b 'Reboot' 'systemctl reboot'
+'';
+in
+{
+  services.greetd = {
+    enable = true;
+    settings = {
+      initial_session = {
+        command = "${pkgs.sway}/bin/sway --css
+      };
+      default_session = {
+        #command = "${pkgs.sway}/bin/sway --config ${swayConfig}";
+      };
+    };
+  };
+
+  environment.etc."greetd/environments".text = ''
+    sway
+    bash
+  '';
+  environment.etc."greetd/style.css".text = ''
+    window {
+      background-image: url("file:///home/bluser/Downloads/test.png");
+      background-size: cover;
+      background-position: center;
+    }
+    box#body {
+      background-color: rgba(0, 0, 0, 0);
+      border-radius: 10px;
+      padding: 50px;
+    }
+  '';
+}
