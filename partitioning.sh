@@ -56,10 +56,10 @@ echo "Formatting EFI boot partition..."
 mkfs.fat -F 32 -n BOOT "$BOOT_PART"
 
 echo "Setting up swap partition..."
-mkswap -L swap "$SWAP_PART"
+mkswap -L SWAP "$SWAP_PART"
 
 echo "Formatting root partition..."
-mkfs.ext4 -L nixos "$ROOT_PART"
+mkfs.ext4 -L MAIN "$ROOT_PART"
 
 # Mount filesystems
 echo "Mounting filesystems..."
