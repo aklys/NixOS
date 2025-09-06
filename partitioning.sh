@@ -7,8 +7,8 @@
 set -e  # Exit on any error
 
 DISK="$1"
-BOOT_SIZE="1G"
-SWAP_SIZE="4G"
+BOOT_SIZE="1GiB"
+SWAP_SIZE="4GiB"
 
 # Validate input
 if [ -z "$DISK" ]; then
@@ -26,17 +26,20 @@ echo "WARNING: This will completely erase $DISK"
 echo "Press Enter to continue, or Ctrl+C to cancel"
 read
 
-# Clear existing partition table
-echo "Clearing existing partition table..."
-sgdisk --zap-all "$DISK"
+# Clear existing partition table and create GPT
+echo "Creating GPT partition table..."
+parted "$DISK" --script mklabel gpt
 
-# Create GPT partition table and partitions
-echo "Creating partitions..."
-sgdisk \
-    --new=1:0:+${BOOT_SIZE} --typecode=1:ef00 --change-name=1:"EFI System" \
-    --new=2:0:+${SWAP_SIZE} --typecode=2:8200 --change-name=2:"Linux swap" \
-    --new=3:0:0 --typecode=3:8300 --change-name=3:"Linux filesystem" \
-    "$DISK"
+# Create partitions
+echo "Creating EFI boot partition..."
+parted "$DISK" --script mkpart "EFI System" fat32 1MiB $BOOT_SIZE
+parted "$DISK" --script set 1 esp on
+
+echo "Creating swap partition..."
+parted "$DISK" --script mkpart "Linux swap" linux-swap $BOOT_SIZE $(echo $BOOT_SIZE $SWAP_SIZE | awk '{print $1 + $2}')GiB
+
+echo "Creating root partition..."
+parted "$DISK" --script mkpart "Linux filesystem" ext4 $(echo $BOOT_SIZE $SWAP_SIZE | awk '{print $1 + $2}')GiB 100%
 
 # Wait for kernel to update partition table
 sleep 2
