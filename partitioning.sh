@@ -7,8 +7,6 @@
 set -e  # Exit on any error
 
 DISK="$1"
-BOOT_SIZE="1GiB"
-SWAP_SIZE="4GiB"
 
 # Validate input
 if [ -z "$DISK" ]; then
@@ -30,16 +28,18 @@ read
 echo "Creating GPT partition table..."
 parted "$DISK" --script mklabel gpt
 
-# Create partitions
+# Create EFI system partition (1GB)
 echo "Creating EFI boot partition..."
-parted "$DISK" --script mkpart "EFI System" fat32 1MiB $BOOT_SIZE
+parted "$DISK" --script mkpart primary fat32 1MiB 1025MiB
 parted "$DISK" --script set 1 esp on
 
+# Create swap partition (4GB) 
 echo "Creating swap partition..."
-parted "$DISK" --script mkpart "Linux swap" linux-swap $BOOT_SIZE $(echo $BOOT_SIZE $SWAP_SIZE | awk '{print $1 + $2}')GiB
+parted "$DISK" --script mkpart primary linux-swap 1025MiB 5121MiB
 
+# Create root partition (remainder)
 echo "Creating root partition..."
-parted "$DISK" --script mkpart "Linux filesystem" ext4 $(echo $BOOT_SIZE $SWAP_SIZE | awk '{print $1 + $2}')GiB 100%
+parted "$DISK" --script mkpart primary ext4 5121MiB 100%
 
 # Wait for kernel to update partition table
 sleep 2
