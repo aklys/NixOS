@@ -24,6 +24,15 @@ echo "WARNING: This will completely erase $DISK"
 echo "Press Enter to continue, or Ctrl+C to cancel"
 read
 
+# Unmount any existing partitions on this disk
+echo "Unmounting any existing partitions..."
+for partition in ${DISK}*; do
+    if [ -b "$partition" ]; then
+        umount "$partition" 2>/dev/null || true
+        swapoff "$partition" 2>/dev/null || true
+    fi
+done
+
 # Clear existing partition table and create GPT
 echo "Clearing existing partition table..."
 wipefs -a "$DISK"
