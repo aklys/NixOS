@@ -13,13 +13,58 @@ readonly BOOT_LABEL="BOOT"
 readonly SWAP_LABEL="SWAP"
 readonly ROOT_LABEL="MAIN"
 
+# Required commands for this script
+readonly REQUIRED_COMMANDS=(
+    "parted"
+    "mkfs.fat"
+    "mkfs.ext4" 
+    "mkswap"
+    "mount"
+    "umount"
+    "swapon"
+    "swapoff"
+    "lsblk"
+    "wipefs"
+    "partprobe"
+    "udevadm"
+    "mountpoint"
+)
+
 # Global variables
 DISK=""
 BOOT_PART=""
 SWAP_PART=""
 ROOT_PART=""
 
-# Validation functions
+# Check for required commands
+check_required_commands() {
+    local missing_commands=()
+    
+    echo "Checking for required commands..."
+    
+    for cmd in "${REQUIRED_COMMANDS[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_commands+=("$cmd")
+        fi
+    done
+    
+    if [ ${#missing_commands[@]} -ne 0 ]; then
+        echo "Error: The following required commands are missing:"
+        printf '%s\n' "${missing_commands[@]}"
+        echo
+        echo "Please install the missing packages:"
+        echo "- parted (for partitioning)"
+        echo "- dosfstools (for mkfs.fat)"
+        echo "- e2fsprogs (for mkfs.ext4)"
+        echo "- util-linux (for mkswap, mount, swapon, lsblk, etc.)"
+        echo "- udev (for udevadm, partprobe)"
+        exit 1
+    fi
+    
+    echo "All required commands are available"
+}
+
+# Validate input
 validate_input() {
     local disk="$1"
     
@@ -37,25 +82,27 @@ validate_input() {
     DISK="$disk"
 }
 
+# Confirm destruction
 confirm_destruction() {
     echo "WARNING: This will completely erase $DISK"
     echo "Press Enter to continue, or Ctrl+C to cancel"
     read
 }
 
-# Utility functions
+# Get correct partition name for different disk types
 get_partition_name() {
     local disk="$1"
     local num="$2"
     
     # Handle different naming schemes
-    if [[ "$disk" =~ nvme|loop|mmcblk ]]; then
+    if [[ "$disk" =~ (nvme|loop|mmcblk) ]]; then
         echo "${disk}p${num}"
     else
         echo "${disk}${num}"
     fi
 }
 
+# Wait for partition to appear
 wait_for_partition() {
     local partition="$1"
     local timeout=30
@@ -73,23 +120,41 @@ wait_for_partition() {
     fi
     
     echo "Partition $partition is ready"
-    return 0
 }
 
-# Cleanup functions
+# Unmount partition if mounted
+unmount_partition() {
+    local partition="$1"
+    
+    if [ -b "$partition" ] && mountpoint -q "$partition" 2>/dev/null; then
+        echo "Unmounting $partition..."
+        if ! umount "$partition" 2>/dev/null; then
+            echo "Warning: Normal unmount failed, trying force unmount..."
+            umount -f "$partition" 2>/dev/null || echo "Warning: Force unmount also failed for $partition"
+        fi
+    fi
+}
+
+# Disable swap if active
+disable_swap() {
+    local partition="$1"
+    
+    if [ -b "$partition" ] && swapon --show=NAME --noheadings 2>/dev/null | grep -q "^$partition$"; then
+        echo "Turning off swap on $partition..."
+        swapoff "$partition" 2>/dev/null || echo "Warning: Failed to turn off swap on $partition"
+    fi
+}
+
+# Clean up existing partitions on disk
 cleanup_disk() {
     local disk="$1"
     echo "Cleaning up existing mounts and swaps on $disk..."
     
-    # Get all partitions for this disk
+    # Get partition names - use lsblk to get actual partition names
     local partitions
-    if [[ "$disk" =~ nvme|loop|mmcblk ]]; then
-        partitions=$(lsblk -ln -o NAME "$disk" 2>/dev/null | tail -n +2 | sed "s|^|/dev/|" || true)
-    else
-        partitions=$(lsblk -ln -o NAME "$disk" 2>/dev/null | tail -n +2 | sed "s|^|/dev/|" || true)
-    fi
+    partitions=$(lsblk -rno NAME "$disk" 2>/dev/null | tail -n +2 | sed 's|^|/dev/|' || true)
     
-    # Unmount and disable swap for existing partitions
+    # Process each partition
     for partition in $partitions; do
         if [ -b "$partition" ]; then
             unmount_partition "$partition"
@@ -98,39 +163,27 @@ cleanup_disk() {
     done
 }
 
-unmount_partition() {
-    local partition="$1"
-    
-    if mountpoint -q "$partition" 2>/dev/null; then
-        echo "Unmounting $partition..."
-        umount "$partition" 2>/dev/null || {
-            echo "Warning: Failed to unmount $partition, trying force unmount..."
-            umount -f "$partition" 2>/dev/null || {
-                echo "Warning: Force unmount also failed for $partition"
-            }
-        }
-    fi
-}
-
-disable_swap() {
-    local partition="$1"
-    
-    if swapon --show=NAME --noheadings 2>/dev/null | grep -q "^$partition$"; then
-        echo "Turning off swap on $partition..."
-        swapoff "$partition" 2>/dev/null || {
-            echo "Warning: Failed to turn off swap on $partition"
-        }
-    fi
-}
-
+# Cleanup on error
 cleanup_on_error() {
     echo "Error occurred, cleaning up..."
-    [ -d "/mnt/boot" ] && umount /mnt/boot 2>/dev/null || true
-    [ -d "/mnt" ] && mountpoint -q /mnt && umount /mnt 2>/dev/null || true
-    [ -n "$SWAP_PART" ] && [ -b "$SWAP_PART" ] && swapoff "$SWAP_PART" 2>/dev/null || true
+    
+    # Unmount boot if mounted
+    if mountpoint -q /mnt/boot 2>/dev/null; then
+        umount /mnt/boot 2>/dev/null || true
+    fi
+    
+    # Unmount root if mounted  
+    if mountpoint -q /mnt 2>/dev/null; then
+        umount /mnt 2>/dev/null || true
+    fi
+    
+    # Turn off swap if active
+    if [ -n "$SWAP_PART" ] && [ -b "$SWAP_PART" ]; then
+        swapoff "$SWAP_PART" 2>/dev/null || true
+    fi
 }
 
-# Partitioning functions
+# Clear partition table
 clear_partition_table() {
     echo "Clearing existing partition table..."
     wipefs -a "$DISK"
@@ -139,6 +192,7 @@ clear_partition_table() {
     parted "$DISK" --script mklabel gpt
 }
 
+# Create partitions
 create_partitions() {
     echo "Creating EFI boot partition..."
     parted "$DISK" --script mkpart primary fat32 1MiB "$BOOT_SIZE"
@@ -151,41 +205,45 @@ create_partitions() {
     parted "$DISK" --script mkpart primary ext4 "$SWAP_SIZE" 100%
 }
 
+# Update partition table
 update_partition_table() {
     echo "Updating partition table..."
     partprobe "$DISK"
     udevadm settle
 }
 
+# Verify partitions were created
 verify_partitions() {
-    local expected_count=3
-    
     echo "Verifying partition creation..."
     sleep 3
     
-    local actual_count=$(lsblk -ln "$DISK" 2>/dev/null | tail -n +2 | wc -l)
-    if [ "$actual_count" -ne "$expected_count" ]; then
-        echo "Error: Expected $expected_count partitions, found $actual_count"
+    # Check that we have exactly 3 partitions
+    local partition_count
+    partition_count=$(lsblk -rno TYPE "$DISK" 2>/dev/null | grep -c "part" || echo "0")
+    
+    if [ "$partition_count" -ne 3 ]; then
+        echo "Error: Expected 3 partitions, found $partition_count"
         return 1
     fi
     
     echo "Partition verification successful"
-    return 0
 }
 
+# Set partition variables
 set_partition_variables() {
     BOOT_PART=$(get_partition_name "$DISK" 1)
     SWAP_PART=$(get_partition_name "$DISK" 2)
     ROOT_PART=$(get_partition_name "$DISK" 3)
 }
 
+# Wait for all partitions
 wait_for_all_partitions() {
     wait_for_partition "$BOOT_PART"
     wait_for_partition "$SWAP_PART"
     wait_for_partition "$ROOT_PART"
 }
 
-# Formatting functions
+# Format boot partition
 format_boot_partition() {
     echo "Formatting EFI boot partition..."
     if ! mkfs.fat -F 32 -n "$BOOT_LABEL" "$BOOT_PART"; then
@@ -194,6 +252,7 @@ format_boot_partition() {
     fi
 }
 
+# Format swap partition
 format_swap_partition() {
     echo "Setting up swap partition..."
     if ! mkswap -L "$SWAP_LABEL" "$SWAP_PART"; then
@@ -202,6 +261,7 @@ format_swap_partition() {
     fi
 }
 
+# Format root partition
 format_root_partition() {
     echo "Formatting root partition..."
     if ! mkfs.ext4 -F -L "$ROOT_LABEL" "$ROOT_PART"; then
@@ -210,13 +270,14 @@ format_root_partition() {
     fi
 }
 
+# Format all partitions
 format_all_partitions() {
     format_boot_partition || return 1
     format_swap_partition || return 1
     format_root_partition || return 1
 }
 
-# Mounting functions
+# Mount root filesystem
 mount_root_filesystem() {
     echo "Mounting root filesystem..."
     if ! mount "$ROOT_PART" /mnt; then
@@ -225,6 +286,7 @@ mount_root_filesystem() {
     fi
 }
 
+# Mount boot filesystem
 mount_boot_filesystem() {
     echo "Creating and mounting boot directory..."
     mkdir -p /mnt/boot
@@ -234,6 +296,7 @@ mount_boot_filesystem() {
     fi
 }
 
+# Enable swap
 enable_swap() {
     echo "Enabling swap..."
     if ! swapon "$SWAP_PART"; then
@@ -242,13 +305,14 @@ enable_swap() {
     fi
 }
 
+# Mount all filesystems
 mount_all_filesystems() {
     mount_root_filesystem || return 1
     mount_boot_filesystem || return 1
     enable_swap || return 1
 }
 
-# Status and reporting functions
+# Display completion status
 display_completion_status() {
     echo "Partitioning and formatting complete!"
     echo
@@ -265,7 +329,7 @@ display_completion_status() {
     echo "Labels created: $BOOT_LABEL, $SWAP_LABEL, $ROOT_LABEL (matching your hardware-configuration.nix)"
 }
 
-# Main execution function
+# Main function
 main() {
     # Set up error handling
     trap cleanup_on_error ERR
