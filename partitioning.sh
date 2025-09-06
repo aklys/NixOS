@@ -25,6 +25,9 @@ echo "Press Enter to continue, or Ctrl+C to cancel"
 read
 
 # Clear existing partition table and create GPT
+echo "Clearing existing partition table..."
+wipefs -a "$DISK"
+
 echo "Creating GPT partition table..."
 parted "$DISK" --script mklabel gpt
 
