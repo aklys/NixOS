@@ -21,7 +21,7 @@ BOOT_PART=""
 SWAP_PART=""
 ROOT_PART=""
 
-# 7. Check required commands are available
+# Check required commands are available
 check_required_commands() {
     local missing=()
     for cmd in "${REQUIRED_COMMANDS[@]}"; do
@@ -37,7 +37,7 @@ check_required_commands() {
     fi
 }
 
-# 2. Get user confirmation for destructive operation
+# Get user confirmation for destructive operation
 confirm_destruction() {
     echo "This will destroy all data on $DISK and prepare it for NixOS installation"
     echo "Type 'yes' to continue:"
@@ -49,7 +49,7 @@ confirm_destruction() {
     fi
 }
 
-# 3. Unmount all partitions for target device
+# Unmount all partitions for target device
 unmount_all_partitions() {
     echo "Unmounting partitions on $DISK..."
     
@@ -72,12 +72,12 @@ unmount_all_partitions() {
     done
 }
 
-# 4. Remove all partitions from device
+# Remove all partitions from device
 remove_all_partitions() {
     echo "Removing existing partitions from $DISK..."
     
     # Wipe filesystem signatures and partition table
-    wipefs -a "$DISK" || { echo "Error: Failed to wipe $DISK"; exit 1; }
+    wipefs -a "$DISK" >/dev/null 2>&1 || { echo "Error: Failed to wipe $DISK"; exit 1; }
 }
 
 # Helper function for partition naming
@@ -90,7 +90,7 @@ get_partition_name() {
     fi
 }
 
-# 5a. Create partition table and partitions
+# Create partition table and partitions
 create_partitions() {
     echo "Creating new partition table and partitions..."
     
@@ -116,21 +116,21 @@ create_partitions() {
     sleep 2
 }
 
-# 5b. Format partitions with labels
+# Format partitions with labels
 format_partitions() {
     echo "Formatting partitions with labels..."
     
     # Format boot partition
-    mkfs.fat -F 32 -n "$BOOT_LABEL" "$BOOT_PART" || { echo "Error: Failed to format boot partition"; exit 1; }
+    mkfs.fat -F 32 -n "$BOOT_LABEL" "$BOOT_PART" >/dev/null 2>&1 || { echo "Error: Failed to format boot partition"; exit 1; }
     
     # Format swap partition
-    mkswap -L "$SWAP_LABEL" "$SWAP_PART" || { echo "Error: Failed to format swap partition"; exit 1; }
+    mkswap -L "$SWAP_LABEL" "$SWAP_PART" >/dev/null 2>&1 || { echo "Error: Failed to format swap partition"; exit 1; }
     
     # Format root partition  
-    mkfs.ext4 -F -L "$ROOT_LABEL" "$ROOT_PART" || { echo "Error: Failed to format root partition"; exit 1; }
+    mkfs.ext4 -F -L "$ROOT_LABEL" "$ROOT_PART" >/dev/null 2>&1 || { echo "Error: Failed to format root partition"; exit 1; }
 }
 
-# 6. Display final results for validation
+# Display final results for validation
 display_results() {
     echo ""
     echo "Complete. Partition layout:"
@@ -139,7 +139,7 @@ display_results() {
     echo "Ready for nixos-generate-config --root /mnt"
 }
 
-# 9. Main execution function
+# Main execution function
 main() {
     # Validate arguments
     if [ -z "$1" ]; then
