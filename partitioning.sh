@@ -133,12 +133,10 @@ format_partitions() {
 # 6. Display final results for validation
 display_results() {
     echo ""
-    echo "Disk preparation complete. Results:"
-    echo "======================================"
-    lsblk -f "$DISK"
+    echo "Complete. Partition layout:"
+    lsblk "$DISK" -o NAME,SIZE,TYPE,FSTYPE,LABEL
     echo ""
-    echo "Ready for: nixos-generate-config --root /mnt"
-    echo "Labels created: $BOOT_LABEL, $SWAP_LABEL, $ROOT_LABEL"
+    echo "Ready for nixos-generate-config --root /mnt"
 }
 
 # 9. Main execution function
