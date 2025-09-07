@@ -5,163 +5,113 @@
 # Usage: ./partition-format.sh /dev/sdX
 # Creates: 1GB EFI boot (BOOT), 4GB swap (SWAP), remainder root (MAIN)
 
-set -e
+set -euo pipefail
 
-# Configuration variables
-readonly REQUIRED_COMMANDS=("parted" "mkfs.fat" "mkfs.ext4" "mkswap" "lsblk" "umount" "swapon" "swapoff" "mountpoint" "wipefs")
+# Configuration
+readonly REQUIRED_COMMANDS=("parted" "mkfs.fat" "mkfs.ext4" "mkswap" "lsblk" "umount" "swapoff" "mountpoint" "wipefs")
 readonly BOOT_SIZE="1025MiB"
 readonly SWAP_SIZE="5121MiB"
 readonly BOOT_LABEL="BOOT"
 readonly SWAP_LABEL="SWAP"
 readonly ROOT_LABEL="MAIN"
 
-# Global variables
 DISK=""
-BOOT_PART=""
-SWAP_PART=""
-ROOT_PART=""
 
-# Check required commands are available
-check_required_commands() {
+check_requirements() {
     local missing=()
     for cmd in "${REQUIRED_COMMANDS[@]}"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing+=("$cmd")
-        fi
+        command -v "$cmd" >/dev/null || missing+=("$cmd")
     done
     
-    if [ ${#missing[@]} -ne 0 ]; then
-        echo "Error: Missing required commands: ${missing[*]}"
-        echo "Install required packages and try again"
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Error: Missing commands: ${missing[*]}"
         exit 1
     fi
 }
 
-# Get user confirmation for destructive operation
-confirm_destruction() {
-    echo "This will destroy all data on $DISK and prepare it for NixOS installation"
+confirm_operation() {
+    echo "WARNING: This will destroy all data on $DISK"
     echo "Type 'yes' to continue:"
     read -r response
-    
-    if [ "$response" != "yes" ]; then
-        echo "Operation cancelled"
-        exit 1
-    fi
+    [ "$response" = "yes" ] || { echo "Cancelled"; exit 1; }
 }
 
-# Unmount all partitions for target device
-unmount_all_partitions() {
-    echo "Unmounting partitions on $DISK..."
+cleanup_disk() {
+    echo "Cleaning up $DISK..."
     
-    # Get all partitions for this disk
-    local partitions
-    partitions=$(lsblk -rno NAME "$DISK" 2>/dev/null | tail -n +2 | sed "s|^|/dev/|" || true)
+    # Unmount any mounted partitions and disable swap
+    while IFS= read -r partition; do
+        [ -b "$partition" ] || continue
+        mountpoint -q "$partition" 2>/dev/null && umount "$partition"
+        swapoff "$partition" 2>/dev/null || true
+    done < <(lsblk -rno NAME "$DISK" 2>/dev/null | tail -n +2 | sed "s|^|/dev/|")
     
-    # Unmount in reverse order (boot before root)
-    mountpoint -q /mnt/boot 2>/dev/null && { umount /mnt/boot || { echo "Error: Failed to unmount /mnt/boot"; exit 1; }; }
-    mountpoint -q /mnt 2>/dev/null && { umount /mnt || { echo "Error: Failed to unmount /mnt"; exit 1; }; }
+    # Clean installation mountpoints if they exist
+    for mount in /mnt/boot /mnt; do
+        mountpoint -q "$mount" 2>/dev/null && umount "$mount"
+    done
     
-    # Unmount any other mounts and disable swap
-    for part in $partitions; do
-        if mountpoint -q "$part" 2>/dev/null; then
-            umount "$part" || { echo "Error: Failed to unmount $part"; exit 1; }
-        fi
-        if swapon --show=NAME --noheadings 2>/dev/null | grep -q "^$part$"; then
-            swapoff "$part" || { echo "Error: Failed to disable swap on $part"; exit 1; }
-        fi
+    # Wipe all signatures
+    wipefs -af "$DISK" >/dev/null
+}
+
+get_partition_name() {
+    local num="$1"
+    [[ "$DISK" =~ (nvme|mmcblk|loop) ]] && echo "${DISK}p${num}" || echo "${DISK}${num}"
+}
+
+create_partitions() {
+    echo "Creating partitions..."
+    
+    parted "$DISK" --script \
+        mklabel gpt \
+        mkpart primary fat32 1MiB "$BOOT_SIZE" \
+        set 1 esp on \
+        mkpart primary linux-swap "$BOOT_SIZE" "$SWAP_SIZE" \
+        mkpart primary ext4 "$SWAP_SIZE" 100%
+    
+    # Verify partitions exist
+    local boot_part swap_part root_part
+    boot_part=$(get_partition_name 1)
+    swap_part=$(get_partition_name 2)
+    root_part=$(get_partition_name 3)
+    
+    for part in "$boot_part" "$swap_part" "$root_part"; do
+        [ -b "$part" ] || { echo "Error: Partition $part not created"; exit 1; }
     done
 }
 
-# Remove all partitions from device
-remove_all_partitions() {
-    echo "Removing existing partitions from $DISK..."
-    
-    # Wipe filesystem signatures and partition table
-    wipefs -a "$DISK" >/dev/null 2>&1 || { echo "Error: Failed to wipe $DISK"; exit 1; }
-}
-
-# Helper function for partition naming
-get_partition_name() {
-    local disk="$1" num="$2"
-    if [[ "$disk" =~ (nvme|mmcblk|loop) ]]; then
-        echo "${disk}p${num}"
-    else
-        echo "${disk}${num}"
-    fi
-}
-
-# Create partition table and partitions
-create_partitions() {
-    echo "Creating new partition table and partitions..."
-    
-    # Create GPT partition table
-    parted "$DISK" --script mklabel gpt || { echo "Error: Failed to create partition table"; exit 1; }
-    
-    # Create EFI boot partition
-    parted "$DISK" --script mkpart primary fat32 1MiB "$BOOT_SIZE" || { echo "Error: Failed to create boot partition"; exit 1; }
-    parted "$DISK" --script set 1 esp on || { echo "Error: Failed to set ESP flag"; exit 1; }
-    
-    # Create swap partition  
-    parted "$DISK" --script mkpart primary linux-swap "$BOOT_SIZE" "$SWAP_SIZE" || { echo "Error: Failed to create swap partition"; exit 1; }
-    
-    # Create root partition
-    parted "$DISK" --script mkpart primary ext4 "$SWAP_SIZE" 100% || { echo "Error: Failed to create root partition"; exit 1; }
-    
-    # Set partition variables
-    BOOT_PART=$(get_partition_name "$DISK" 1)
-    SWAP_PART=$(get_partition_name "$DISK" 2)  
-    ROOT_PART=$(get_partition_name "$DISK" 3)
-    
-    # Wait for kernel to recognize partitions
-    sleep 2
-}
-
-# Format partitions with labels
 format_partitions() {
-    echo "Formatting partitions with labels..."
+    echo "Formatting partitions..."
     
-    # Format boot partition
-    mkfs.fat -F 32 -n "$BOOT_LABEL" "$BOOT_PART" >/dev/null 2>&1 || { echo "Error: Failed to format boot partition"; exit 1; }
+    local boot_part swap_part root_part
+    boot_part=$(get_partition_name 1)
+    swap_part=$(get_partition_name 2)
+    root_part=$(get_partition_name 3)
     
-    # Format swap partition
-    mkswap -L "$SWAP_LABEL" "$SWAP_PART" >/dev/null 2>&1 || { echo "Error: Failed to format swap partition"; exit 1; }
-    
-    # Format root partition  
-    mkfs.ext4 -F -L "$ROOT_LABEL" "$ROOT_PART" >/dev/null 2>&1 || { echo "Error: Failed to format root partition"; exit 1; }
+    mkfs.fat -F 32 -n "$BOOT_LABEL" "$boot_part" >/dev/null
+    mkswap -L "$SWAP_LABEL" "$swap_part" >/dev/null
+    mkfs.ext4 -F -L "$ROOT_LABEL" "$root_part" >/dev/null
 }
 
-# Display final results for validation
-display_results() {
-    echo ""
-    echo "Complete. Partition layout:"
+show_results() {
+    echo -e "\nComplete. Partition layout:"
     lsblk "$DISK" -o NAME,SIZE,TYPE,FSTYPE,LABEL
-    echo ""
-    echo "Ready for nixos-generate-config --root /mnt"
+    echo -e "\nReady for: nixos-generate-config --root /mnt"
 }
 
-# Main execution function
 main() {
-    # Validate arguments
-    if [ -z "$1" ]; then
-        echo "Usage: $0 /dev/sdX"
-        exit 1
-    fi
-    
-    if [ ! -b "$1" ]; then
-        echo "Error: $1 is not a valid block device"
-        exit 1
-    fi
+    [ $# -eq 1 ] || { echo "Usage: $0 /dev/sdX"; exit 1; }
+    [ -b "$1" ] || { echo "Error: $1 is not a block device"; exit 1; }
     
     DISK="$1"
     
-    # Execute in order
-    check_required_commands
-    confirm_destruction
-    unmount_all_partitions
-    remove_all_partitions
+    check_requirements
+    confirm_operation
+    cleanup_disk
     create_partitions
     format_partitions
-    display_results
+    show_results
 }
 
 main "$@"
