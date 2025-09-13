@@ -9,7 +9,7 @@ set -euo pipefail
 
 # Configuration
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PARTITION_SCRIPT="$SCRIPT_DIR/partition_prep.sh"
+readonly PARTITION_SCRIPT="$SCRIPT_DIR/Partition_Preparation.sh"
 readonly CONFIG_DEFAULT_PATH="/tmp/nixos-config"
 readonly MOUNT_ROOT="/mnt"
 
