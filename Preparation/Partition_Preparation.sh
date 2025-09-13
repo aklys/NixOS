@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # NixOS Disk Preparation Script
 # Purpose: Prepare disk for NixOS installation by creating labeled partitions
