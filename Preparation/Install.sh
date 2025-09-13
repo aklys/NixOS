@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # NixOS Complete Installation Script
 # Purpose: Automate full NixOS installation from partition to bootable system
@@ -9,7 +9,7 @@ set -euo pipefail
 
 # Configuration
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PARTITION_SCRIPT="$SCRIPT_DIR/partition-prep.sh"
+readonly PARTITION_SCRIPT="$SCRIPT_DIR/partition_prep.sh"
 readonly CONFIG_DEFAULT_PATH="/tmp/nixos-config"
 readonly MOUNT_ROOT="/mnt"
 
